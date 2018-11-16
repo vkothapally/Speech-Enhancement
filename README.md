@@ -22,7 +22,7 @@ Usage
 
 Results
 ========
-<audio src="./audiofiles/Clean.wav" controls preload>ClickThis</audio>
+
 
 Citation
 ========
