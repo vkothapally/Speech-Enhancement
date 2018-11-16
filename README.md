@@ -1,6 +1,6 @@
 Single channel speech dereverberation
 ========
-![CRSS](https://img.shields.io/badge/CRSS-RSTL-orange.svg)![build:passing](https://img.shields.io/badge/build-passing-brightgreen.svg)
+![CRSS](https://img.shields.io/badge/CRSS-RSTL-orange.svg)  ![build:passing](https://img.shields.io/badge/build-passing-brightgreen.svg)
     
 
 In this study, we propose such a preprocessing technique for combined detection and enhancement of reverberant speech using a single microphone for distant speech applications. The proposed system employs a framework where the target speech is synthesized using continuous auditory masks estimated from sub-band signals. 
