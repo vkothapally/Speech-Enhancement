@@ -1,5 +1,9 @@
 Single channel speech dereverberation
 ========
+.. image:: https://img.shields.io/badge/build-passing-brightgreen.svg
+    :target: http://nara-wpe.readthedocs.io/en/pypi-release/
+    :alt: Documentation Status
+
 
 In this study, we propose such a preprocessing technique for combined detection and enhancement of reverberant speech using a single microphone for distant speech applications. The proposed system employs a framework where the target speech is synthesized using continuous auditory masks estimated from sub-band signals. 
 
