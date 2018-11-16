@@ -9,12 +9,12 @@ Linear gammatone analysis/synthesis filter banks are used as an auditory model f
 Installation
 ========
 For testing and/or making changes to the most recent version: Clone the repository and install it as follows:
-.. code-block:: bash
 
+```
   git clone https://github.com/vkothapally/Speech-Dereverberation.git
   cd Speech-Dereverberation
   pip install --editable .
-
+```
 
 Usage
 ========
