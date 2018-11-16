@@ -9,7 +9,8 @@ Gammtone FilterBank Analysis and Synthesis
 
 import numpy as np
 from scipy.io import loadmat
-import matplotlib.pyplot as plt
+from numpy.matlib import repmat
+
 class Gammatone :
       
       def __init__(self):
@@ -64,6 +65,18 @@ class Gammatone :
                   gFilters[:,k] = gain[k]*(samplerate**3)*(tmp_t**(filterOrder-1))*\
                                     np.exp(-2*np.pi*b[k]*tmp_t)*np.cos(2*np.pi*center_freq[k]*tmp_t)
             return gFilters
-
+      
+      def get_frames(self, signal, framelen, overlap):
+            numframes = int(np.floor(len(signal)/overlap)-1)
+            frame_idx = repmat(np.array(range(framelen))[:, np.newaxis],1,numframes) + \
+                        repmat(np.array(range(numframes))[np.newaxis,:]*overlap,framelen,1)
+            if frame_idx[-1,-1]<len(signal)-1:
+                  samples = len(signal) - frame_idx[-1,-1]
+                  last_frame = np.zeros((framelen,1))
+                  last_frame[0:samples,0] = numframes*overlap+np.array(range(samples))
+                  frame_idx = np.hstack((frame_idx, last_frame))
+                  numframes = numframes + 1
+            return frame_idx.astype(int), numframes
+            
 
 gt = Gammatone()
