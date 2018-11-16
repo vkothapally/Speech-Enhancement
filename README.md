@@ -1,4 +1,4 @@
-# Single channel speech dereveberation
+# Single channel speech dereverberation
 
 
 Citation
