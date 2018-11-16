@@ -4,22 +4,31 @@
 Created on Thu Nov 15 16:43:56 2018
 
 @author: Vinay Kothapally
-Gammtone FilterBank Analysis and Synthesis
+
+Single-Channel Speech Deverberation using Gammtone FilterBank
+This method Uses:    
+    * Gammtone FilterBanks
+    * Time-Frequency Masking 
+    * Spectral Subtraction
+    * MMSE/log-MMSE enahncer
+    * Post-Filtering
+
 """
 
 import numpy as np
 from scipy.io import loadmat
 from numpy.matlib import repmat
+import argparse
 
 class Gammatone :
       
-      def __init__(self):
-            filterOrder  = 4;
-            filterLength = 512;
-            nFilterBanks = 64;
-            samplerate   = 8000;
-            fRange       = [30, samplerate]
-            self.gFilters     = self.gammtone_filters(nFilterBanks, filterLength, filterOrder, samplerate, fRange)
+      def __init__(self,samplerate, nFilterBanks):
+            self.filterOrder  = 4;
+            self.filterLength = 512;
+            self.nFilterBanks = nFilterBanks;
+            self.samplerate   = samplerate;
+            self.fRange       = [30, samplerate]
+            self.gFilters     = self.gammtone_filters()
       
       def hz2erb(self, frequecny):
             hz = np.asarray(frequecny)
@@ -38,31 +47,30 @@ class Gammatone :
             return af, bf, cf, ff
       
       def loudness(self,frequecny):      
-      # Computes loudness level in Phons on the basis of equal-loudness functions.
             freq = np.asarray(frequecny)
             dB   = 60
             af, bf, cf, ff = self.load_coeff('f_af_bf_cf.mat')
             if any(freq<20) or any(freq>12500):
                   print('Accepted frequency range: [20,12500]')
                   return
-            idx = np.array([find(ff<freq[k])[-1:] for k in range(len(freq))]).flatten()
+            idx = np.array([np.max(np.where(ff<freq[k])) for k in range(len(freq))]).flatten()
             afy=af[idx]+(freq-ff[idx])*(af[idx+1]-af[idx])/(ff[idx+1]-ff[idx]);
             bfy=bf[idx]+(freq-ff[idx])*(bf[idx+1]-bf[idx])/(ff[idx+1]-ff[idx]);
             cfy=cf[idx]+(freq-ff[idx])*(cf[idx+1]-cf[idx])/(ff[idx+1]-ff[idx]);
             loud =4.2+afy*(dB-cfy)/(1+bfy*(dB-cfy));      
             return loud 
       
-      def gammtone_filters(self,nFilterBanks, filterLength, filterOrder, samplerate, fRange):
-            erb_b = self.hz2erb([30, 8000])
-            erb = np.linspace(erb_b[0], erb_b[1], nFilterBanks, endpoint=True)
+      def gammtone_filters(self):
+            erb_b = self.hz2erb(self.fRange)
+            erb = np.linspace(erb_b[0], erb_b[1], self.nFilterBanks, endpoint=True)
             center_freq = self.erb2hz(erb);
             b = 1.019*24.7*(4.37*center_freq/1000+1);     
                
-            gFilters = np.zeros((filterLength, nFilterBanks))
-            tmp_t = np.array(range(0,filterLength))/samplerate;
-            gain = (10**((self.loudness(center_freq)-60)/20)/3)*((2*np.pi*b/samplerate)**4); 
-            for k in range(nFilterBanks):
-                  gFilters[:,k] = gain[k]*(samplerate**3)*(tmp_t**(filterOrder-1))*\
+            gFilters = np.zeros((self.filterLength, self.nFilterBanks))
+            tmp_t = np.array(range(0,self.filterLength))/self.samplerate;
+            gain = (10**((self.loudness(center_freq)-60)/20)/3)*((2*np.pi*b/self.samplerate)**4); 
+            for k in range(self.nFilterBanks):
+                  gFilters[:,k] = gain[k]*(self.samplerate**3)*(tmp_t**(self.filterOrder-1))*\
                                     np.exp(-2*np.pi*b[k]*tmp_t)*np.cos(2*np.pi*center_freq[k]*tmp_t)
             return gFilters
       
@@ -77,6 +85,14 @@ class Gammatone :
                   frame_idx = np.hstack((frame_idx, last_frame))
                   numframes = numframes + 1
             return frame_idx.astype(int), numframes
-            
 
-gt = Gammatone()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-i", required=True, action='store_true', help="Degraded audio file (absolute path)")
+    parser.add_argument("-o", required=True, action='store_true', help="Enhanced audio file (absolute path)")
+    parser.add_argument("-n", required=False, action='store_true', help="Number of Gammtone FilterBanks")
+    parser.add_argument("-w", required=False, action='store_true', help="Window Length (ms)")
+    parser.add_argument("-s", required=False, action='store_true', help="Overlap (ms)")
+
+    args = parser.parse_args()
+    gt = Gammatone(64, 8000)
