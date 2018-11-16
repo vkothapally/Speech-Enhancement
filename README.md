@@ -1,2 +1,2 @@
 # Speech-Enhancement
-A single channel speech enhancement using Gammatone Filterbanks
+A single channel speech derevberation using Gammatone Filterbanks
