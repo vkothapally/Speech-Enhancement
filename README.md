@@ -4,7 +4,7 @@
 Citation
 ========
 
-To cite this implementation, you can cite the following paper
+If this implementation was helpful, you can cite the following paper:
 
      @article{kothapally2017speech,
       title={Speech detection and enhancement using single microphone for distant speech applications in reverberant environments},
