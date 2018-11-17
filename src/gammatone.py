@@ -131,7 +131,7 @@ class Gammatone :
             enhanced = np.mean(subband_signals*weight, axis=1)      
             return enhanced
 
-audio, samplerate = sf.read('../audiofiles/Clean.wav')
+audio, samplerate = sf.read('../audiofiles/Reverb.wav')
 gt = Gammatone(samplerate, 256)
 framelen = int(20e-3*samplerate)
 overlap = int(10e-3*samplerate)
