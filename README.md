@@ -26,7 +26,7 @@ Usage
 
 Results
 ========
-![Spectorgram_Comparision]('./audiofiles/spec_comparision.jpg')
+![Spectorgram_Comparision](https://github.com/vkothapally/Speech-Dereverberation/blob/master/audiofiles/spec_comparision.jpg)
 
 Citation
 ========
