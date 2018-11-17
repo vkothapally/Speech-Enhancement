@@ -16,9 +16,13 @@ This method Uses:
 """
 
 import numpy as np
+import soundfile as sf
 from scipy.io import loadmat
+from scipy.signal import lfilter, spectrogram
 from numpy.matlib import repmat
-import argparse
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
 
 class Gammatone :
       
@@ -29,7 +33,9 @@ class Gammatone :
             self.samplerate   = samplerate;
             self.fRange       = [30, samplerate]
             self.gFilters     = self.gammtone_filters()
-      
+            self.pca          = PCA(n_components=1)
+            self.scaler       = StandardScaler()
+            
       def hz2erb(self, frequecny):
             hz = np.asarray(frequecny)
             return 21.4*np.log10(4.37e-3*hz+1)
@@ -46,7 +52,7 @@ class Gammatone :
             ff = coeff['ff'].flatten()
             return af, bf, cf, ff
       
-      def loudness(self,frequecny):      
+      def loudness(self,frequecny):  
             freq = np.asarray(frequecny)
             dB   = 60
             af, bf, cf, ff = self.load_coeff('f_af_bf_cf.mat')
@@ -64,11 +70,11 @@ class Gammatone :
             erb_b = self.hz2erb(self.fRange)
             erb = np.linspace(erb_b[0], erb_b[1], self.nFilterBanks, endpoint=True)
             center_freq = self.erb2hz(erb);
-            b = 1.019*24.7*(4.37*center_freq/1000+1);     
-               
+            b = 1.019*24.7*(4.37*center_freq/1000+1)     
+            self.midearcoeff = 10**((self.loudness(center_freq)-60)/20)    
             gFilters = np.zeros((self.filterLength, self.nFilterBanks))
             tmp_t = np.array(range(0,self.filterLength))/self.samplerate;
-            gain = (10**((self.loudness(center_freq)-60)/20)/3)*((2*np.pi*b/self.samplerate)**4); 
+            gain = (self.midearcoeff/3)*((2*np.pi*b/self.samplerate)**4); 
             for k in range(self.nFilterBanks):
                   gFilters[:,k] = gain[k]*(self.samplerate**3)*(tmp_t**(self.filterOrder-1))*\
                                     np.exp(-2*np.pi*b[k]*tmp_t)*np.cos(2*np.pi*center_freq[k]*tmp_t)
@@ -85,14 +91,79 @@ class Gammatone :
                   frame_idx = np.hstack((frame_idx, last_frame))
                   numframes = numframes + 1
             return frame_idx.astype(int), numframes
+      
+      def compute_feats(self, signal, frame_idx):
+            subband_frames = signal[frame_idx]
+            energy = np.array(np.abs(np.sum(subband_frames**2, axis=0))) 
+            pscore = np.array(np.var(subband_frames, axis=0)**2.1/np.var(np.abs(subband_frames),axis=0))
+            diff_n = np.array(np.var([(np.mean(np.diff(subband_frames,n, axis=0),axis=0)) for n in range(5)],axis=0))
+            corr_n = np.mean(np.vstack([np.append(list(np.zeros((n))), np.mean(subband_frames[:,:-n]*subband_frames[:,n:],axis=0)) for n in range(1,6)]), axis=0)
+            features = np.vstack([energy, pscore, diff_n, corr_n]).transpose()
+            features = self.pca.fit_transform(self.scaler.fit_transform(features)).flatten()
+            features = self.softmax(1/(1 + np.exp(-1.2*features)))
+            return features
+            
+      def softmax(self, input):
+            output = np.exp(input)/np.sum(np.exp(input)+1e-3)
+            output = (output - np.min(output))/np.max(output)
+            return output
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-i", required=True, action='store_true', help="Degraded audio file (absolute path)")
-    parser.add_argument("-o", required=True, action='store_true', help="Enhanced audio file (absolute path)")
-    parser.add_argument("-n", required=False, action='store_true', help="Number of Gammtone FilterBanks")
-    parser.add_argument("-w", required=False, action='store_true', help="Window Length (ms)")
-    parser.add_argument("-s", required=False, action='store_true', help="Overlap (ms)")
+      def gammatoneMaskEstimate(self, block, framelen, overlap):
+            subband_signals = np.vstack([lfilter(self.gFilters[:,k],1,block) for k in range(self.nFilterBanks)]).transpose()
+            frame_idx, numframes = self.get_frames(block, framelen, overlap)
+            Mask = np.zeros((self.nFilterBanks,numframes))
+            for i in range(self.nFilterBanks):
+                  Mask[i,:] = self.compute_feats(subband_signals[:,i], frame_idx)
+            Mask = np.flipud(Mask/repmat(np.max(Mask,axis=1)[:,np.newaxis],1,numframes))
+            enhanced = self.gammatone_synthesis(subband_signals, Mask, block, framelen, overlap, frame_idx, numframes)
+            enhanced = np.max(block)*enhanced/np.max(enhanced)
+            return enhanced, Mask
+      
+      def gammatone_synthesis(self, subband_signals, Mask, block, framelen, overlap, frame_idx, numframes):
+            coswin    = (1+np.cos(2*np.pi*np.array(range(framelen))/framelen- np.pi))/2
+            subband_signals = np.flipud(subband_signals)/self.midearcoeff
+            subband_signals = np.vstack([lfilter(self.gFilters[:,k],1,subband_signals[:,k]) for k in range(self.nFilterBanks)]).transpose()
+            subband_signals = np.flipud(subband_signals)/self.midearcoeff
+            weight = np.zeros((len(block), self.nFilterBanks))
+            
+            for m in range(numframes): 
+                  weight[frame_idx[:,m],:] = weight[frame_idx[:,m],:] + np.transpose(np.matmul(Mask[:,m][:,np.newaxis],coswin[np.newaxis,:]))
+            enhanced = np.mean(subband_signals*weight, axis=1)      
+            return enhanced
 
-    args = parser.parse_args()
-    gt = Gammatone(64, 8000)
+audio, samplerate = sf.read('../audiofiles/Clean.wav')
+gt = Gammatone(samplerate, 256)
+framelen = int(20e-3*samplerate)
+overlap = int(10e-3*samplerate)
+output, Mask= gt.gammatoneMaskEstimate(audio,framelen, overlap)
+sf.write('../audiofiles/Enhanced.wav', output, samplerate)
+
+plt.figure(num=101)
+f, t, Sxx = spectrogram(audio, samplerate, window=np.hamming(framelen), noverlap=overlap, scaling='spectrum',mode='magnitude')
+plt.pcolormesh(t, f, 10*np.log10(Sxx))
+plt.ylabel('Frequency [Hz]')
+plt.xlabel('Time [sec]')
+plt.show()
+
+
+
+plt.figure(num=102)
+f, t, Sxx = spectrogram(output, samplerate, window=np.hamming(framelen), noverlap=overlap, scaling='spectrum',mode='magnitude')
+plt.pcolormesh(t, f, 10*np.log10(Sxx))
+plt.ylabel('Frequency [Hz]')
+plt.xlabel('Time [sec]')
+plt.show()
+
+'''
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+plt.figure()
+ax = plt.gca()
+im = ax.imshow(Mask, cmap='bone')
+divider = make_axes_locatable(ax)
+cax = divider.append_axes("right", size="5%", pad=0.05)
+plt.colorbar(im, cax=cax)
+'''
+
+
+
