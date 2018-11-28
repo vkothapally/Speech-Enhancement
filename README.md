@@ -1,4 +1,4 @@
-Single channel speech dereverberation
+Speech Enhancement (Multi-Microphone Front-End Processing)
 ========
 ![CRSS](https://img.shields.io/badge/CRSS-RSTL-orange.svg)  ![build:passing](https://img.shields.io/badge/build-passing-brightgreen.svg)
     
