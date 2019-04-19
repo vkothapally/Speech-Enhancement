@@ -1,169 +1,288 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Thu Nov 15 16:43:56 2018
+Created on Wed Feb 13 15:43:11 2019
 
 @author: Vinay Kothapally
 
-Single-Channel Speech Deverberation using Gammtone FilterBank
-This method Uses:    
-    * Gammtone FilterBanks
-    * Time-Frequency Masking 
-    * Spectral Subtraction
-    * MMSE/log-MMSE enahncer
-    * Post-Filtering
 
 """
 
 import numpy as np
-import soundfile as sf
-from scipy.io import loadmat
-from scipy.signal import lfilter, spectrogram
-from numpy.matlib import repmat
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-import matplotlib.pyplot as plt
+import scipy.io
+import scipy.signal
+from numpy import matlib as mb
+from scipy.signal import medfilt2d, medfilt, resample
+from sklearn.decomposition import PCA as sklearnPCA
+np.seterr(under="ignore")
 
-class Gammatone :
+def hz2erb(hz):
+      erb=21.4*np.log10(4.37e-3*hz+1)
+      return np.array(erb)
+
+
+def erb2hz(erb):
+      hz=(10**(erb/21.4)-1)/4.37e-3
+      return np.array(hz)
+
+
+
+def loudness(freq):
+      dB=60
+      mat = scipy.io.loadmat('f_af_bf_cf.mat')
+      af = mat['af'][0]
+      bf = mat['bf'][0]
+      cf = mat['cf'][0]
+      ff = mat['ff'][0]
       
-      def __init__(self,samplerate, nFilterBanks):
-            self.filterOrder  = 4;
-            self.filterLength = 512;
-            self.nFilterBanks = nFilterBanks;
-            self.samplerate   = samplerate;
-            self.fRange       = [30, samplerate]
-            self.gFilters     = self.gammtone_filters()
-            self.pca          = PCA(n_components=1)
-            self.scaler       = StandardScaler()
+      if freq<20.0 or freq>12500.0:
+            return 0
+      k = 0
+      while (ff[k] < freq):
+            k=k+1
+        
+      afy=af[k-1]+(freq-ff[k-1])*(af[k]-af[k-1])/(ff[k]-ff[k-1])
+      bfy=bf[k-1]+(freq-ff[k-1])*(bf[k]-bf[k-1])/(ff[k]-ff[k-1])
+      cfy=cf[k-1]+(freq-ff[k-1])*(cf[k]-cf[k-1])/(ff[k]-ff[k-1])
+      
+      loud = (4.2+afy*(dB-cfy)/(1+bfy*(dB-cfy)))
+
+      return loud
+     
+def nextpow2(x):
+      """Return the first integer N such that 2**N >= abs(x)"""
+      return np.ceil(np.log2(np.abs(x)))
+
+def fftfilt_one(b, x, *n):
+    """Filter the signal x with the FIR filter described by the
+    coefficients in b using the overlap-add method. If the FFT
+    length n is not specified, it and the overlap-add block length
+    are selected so as to minimize the computational cost of
+    the filtering operation."""
+    
+    N_x = len(x)
+    N_b = len(b)
+
+    # Determine the FFT length to use:
+    if len(n):
+        n = n[0]
+        if n != np.int(n) or n <= 0:
+            raise ValueError('n must be a nonnegative integer')
+        if n < N_b:
+            n = N_b
+        N_fft = 2**nextpow2(n)
+    else:
+
+        if N_x > N_b:
+            N = 2**np.arange(np.ceil(np.log2(N_b)),np.floor(np.log2(N_x)))
+            cost = np.ceil(N_x/(N-N_b+1))*N*(np.log2(N)+1)
+            N_fft = N[np.argmin(cost)]
+        else:
+            N_fft = 2**nextpow2(N_b+N_x-1)
+
+    N_fft = int(N_fft)
+    
+    # Compute the block length:
+    L = int(N_fft - N_b + 1) 
+    # Compute the transform of the filter:
+    H = np.fft.fft(b,N_fft)
+    y = np.zeros(N_x,float)
+    i = 0
+    while i <= N_x:
+        il = np.min([i+L,N_x])
+        k = np.min([i+N_fft,N_x])
+        yt = np.fft.ifft(np.fft.fft(x[i:il],N_fft)*H,N_fft) # Overlap..
+        y[i:k] = y[i:k] + np.real(yt[:k-i])            # and add
+        i += L
+    return y
+
+def fftfilt(b, x, *n):
+    """Filter the signal x with the FIR filter described by the
+    coefficients in b using the overlap-add method. If the FFT
+    length n is not specified, it and the overlap-add block length
+    are selected so as to minimize the computational cost of
+    the filtering operation."""
+    
+    N_x = len(x)
+    N_b = np.shape(b)[0]
+    N_f = np.shape(b)[1]
+
+    # Determine the FFT length to use:
+    if len(n):
+        n = n[0]
+        if n != np.int(n) or n <= 0:
+            raise ValueError('n must be a nonnegative integer')
+        if n < N_b:
+            n = N_b
+        N_fft = 2**nextpow2(n)
+    else:
+
+        if N_x > N_b:
+            N = 2**np.arange(np.ceil(np.log2(N_b)),np.floor(np.log2(N_x)))
+            cost = np.ceil(N_x/(N-N_b+1))*N*(np.log2(N)+1)
+            N_fft = N[np.argmin(cost)]
+        else:
+            N_fft = 2**nextpow2(N_b+N_x-1)
+
+    N_fft = int(N_fft)
+    
+    # Compute the block length:
+    L = int(N_fft - N_b + 1) 
+    # Compute the transform of the filter:
+    y = np.zeros((N_x,N_f),float)
+    for v in range(N_f):
+          H = np.fft.fft(b[:,v],N_fft)
+          i = 0
+          while i <= N_x:
+                il = np.min([i+L,N_x])
+                k = np.min([i+N_fft,N_x])
+                yt = np.fft.ifft(np.fft.fft(x[i:il],N_fft)*H,N_fft) # Overlap..
+                y[i:k,v] = y[i:k,v] + np.real(yt[:k-i])          # and add
+                i += L
+    return y
+
+
+
+
+def get_GTfilters(nFilterBanks, samplerate, fRange, frameLen, overlap):
+      
+      filterOrder = 4
+      gammaLen = 1024
+      phase = np.zeros((nFilterBanks,))
+    
+      erb_b = hz2erb(np.array(fRange))
+      erb = np.arange(erb_b[0], erb_b[1]+0.0001, np.diff(erb_b)/(nFilterBanks-1))
+      centerFreq = erb2hz(erb)
+      b = np.array(1.019*24.7*(4.37*centerFreq/1000+1))
+      t_gammaTone = np.arange(1,gammaLen+1)/samplerate
+      gammaToneFilters = np.zeros((gammaLen, nFilterBanks))
+      for k in range(nFilterBanks):
+            gain = (10**((loudness(centerFreq[k])-60)/20)/3)*(2*np.pi*b[k]/samplerate)**4
+            gammaToneFilters[:,k] = gain*(samplerate**3)*(t_gammaTone**(filterOrder-1))*\
+                                    np.exp(-2*np.pi*b[k]*t_gammaTone)*np.cos(2*np.pi*centerFreq[k]*t_gammaTone+phase[k])
+      
+      gamma_param = {}
+      gamma_param['filterOrder'] = filterOrder;
+      gamma_param['nFilterBanks'] = nFilterBanks;
+      gamma_param['filtLen'] = gammaLen;
+      gamma_param['cf'] = centerFreq;
+      gamma_param['b'] = b;
+      gamma_param['gFilters'] = gammaToneFilters;
+      gamma_param['midEarCoeff'] = [10**((loudness(centerFreq[k])-60)/20) for k in range(len(centerFreq))]      
+      gamma_param['fs'] = samplerate;
+      gamma_param['framelen'] = int(np.round(frameLen*samplerate))
+      gamma_param['overlap'] = int(np.round(overlap*samplerate))
+      gamma_param['coswin'] = (1 + np.cos(2*np.pi*np.array(range(gamma_param['framelen']))/gamma_param['framelen'] - np.pi))/2;
+      
+      return gamma_param
+
+
+def getFrames(signal, gamma_param):
+      frameLen = gamma_param['framelen']
+      overlap = gamma_param['overlap']
+      numFrames = int(np.ceil((len(signal)-overlap)/overlap))
+      signal2 = np.pad(signal,(0, (numFrames+1)*overlap - len(signal)), mode='constant')
+      frameIdx = mb.repmat(np.arange(0,frameLen), numFrames, 1).transpose() + \
+                 mb.repmat(np.arange(0,numFrames*overlap, overlap), frameLen, 1)
+      frameData = signal2[frameIdx]*mb.repmat(np.sqrt(np.hamming(frameLen)), numFrames,1).transpose()
+      return  frameData, frameIdx, numFrames
+
+def softmax(input):
+    regularization = 0.000001
+    output = np.exp(input)/(np.sum(np.exp(input), axis=0)+regularization)
+    output = (output - np.min(output))/(np.max(output)+regularization)
+    return output
+
+
+
+def zmean(input):
+      output = (input - np.mean(input))/(np.std(input)+1e-3)
+      output[np.isnan(output)] = 0
+      return output.flatten()
+
+def odd(f):
+    f = int(np.ceil(f))
+    return f + 1 if f % 2 == 0 else f
+
+
+def GT_SPP_Enhance(x,gamma_param):
+      gamma_mic = fftfilt(gamma_param['gFilters'], x)
+      sklearn_pca = sklearnPCA(n_components=1,svd_solver='full')
+      Mask = []
+      
+      for k in range(gamma_param['nFilterBanks']):
+            gamma_frames, frameIdx, numFrames = getFrames(gamma_mic[:,k], gamma_param)
             
-      def hz2erb(self, frequecny):
-            hz = np.asarray(frequecny)
-            return 21.4*np.log10(4.37e-3*hz+1)
-      
-      def erb2hz(self, frequecny):
-            erb = np.asarray(frequecny)
-            return (10**(erb/21.4)-1)/4.37e-3
+            # Energy
+            Energy = zmean(20*np.log10(np.sum(np.abs(gamma_frames), axis=0)))
             
-      def load_coeff(self, filename):
-            coeff = loadmat('f_af_bf_cf.mat')
-            af = coeff['af'].flatten()
-            bf = coeff['bf'].flatten()
-            cf = coeff['cf'].flatten()
-            ff = coeff['ff'].flatten()
-            return af, bf, cf, ff
-      
-      def loudness(self,frequecny):  
-            freq = np.asarray(frequecny)
-            dB   = 60
-            af, bf, cf, ff = self.load_coeff('f_af_bf_cf.mat')
-            if any(freq<20) or any(freq>12500):
-                  print('Accepted frequency range: [20,12500]')
-                  return
-            idx = np.array([np.max(np.where(ff<freq[k])) for k in range(len(freq))]).flatten()
-            afy=af[idx]+(freq-ff[idx])*(af[idx+1]-af[idx])/(ff[idx+1]-ff[idx]);
-            bfy=bf[idx]+(freq-ff[idx])*(bf[idx+1]-bf[idx])/(ff[idx+1]-ff[idx]);
-            cfy=cf[idx]+(freq-ff[idx])*(cf[idx+1]-cf[idx])/(ff[idx+1]-ff[idx]);
-            loud =4.2+afy*(dB-cfy)/(1+bfy*(dB-cfy));      
-            return loud 
-      
-      def gammtone_filters(self):
-            erb_b = self.hz2erb(self.fRange)
-            erb = np.linspace(erb_b[0], erb_b[1], self.nFilterBanks, endpoint=True)
-            center_freq = self.erb2hz(erb);
-            b = 1.019*24.7*(4.37*center_freq/1000+1)     
-            self.midearcoeff = 10**((self.loudness(center_freq)-60)/20)    
-            gFilters = np.zeros((self.filterLength, self.nFilterBanks))
-            tmp_t = np.array(range(0,self.filterLength))/self.samplerate;
-            gain = (self.midearcoeff/3)*((2*np.pi*b/self.samplerate)**4); 
-            for k in range(self.nFilterBanks):
-                  gFilters[:,k] = gain[k]*(self.samplerate**3)*(tmp_t**(self.filterOrder-1))*\
-                                    np.exp(-2*np.pi*b[k]*tmp_t)*np.cos(2*np.pi*center_freq[k]*tmp_t)
-            return gFilters
-      
-      def get_frames(self, signal, framelen, overlap):
-            numframes = int(np.floor(len(signal)/overlap)-1)
-            frame_idx = repmat(np.array(range(framelen))[:, np.newaxis],1,numframes) + \
-                        repmat(np.array(range(numframes))[np.newaxis,:]*overlap,framelen,1)
-            if frame_idx[-1,-1]<len(signal)-1:
-                  samples = len(signal) - frame_idx[-1,-1]
-                  last_frame = np.zeros((framelen,1))
-                  last_frame[0:samples,0] = numframes*overlap+np.array(range(samples))
-                  frame_idx = np.hstack((frame_idx, last_frame))
-                  numframes = numframes + 1
-            return frame_idx.astype(int), numframes
-      
-      def compute_feats(self, signal, frame_idx):
-            subband_frames = signal[frame_idx]
-            energy = np.array(np.abs(np.sum(subband_frames**2, axis=0))) 
-            pscore = np.array(np.var(subband_frames, axis=0)**2.1/np.var(np.abs(subband_frames),axis=0))
-            diff_n = np.array(np.var([(np.mean(np.diff(subband_frames,n, axis=0),axis=0)) for n in range(5)],axis=0))
-            corr_n = np.mean(np.vstack([np.append(list(np.zeros((n))), np.mean(subband_frames[:,:-n]*subband_frames[:,n:],axis=0)) for n in range(1,6)]), axis=0)
-            features = np.vstack([energy, pscore, diff_n, corr_n]).transpose()
-            features = self.pca.fit_transform(self.scaler.fit_transform(features)).flatten()
-            features = self.softmax(1/(1 + np.exp(-1.2*features)))
-            return features
+            # Peak2Valey Ratio
+            PeakValey = zmean(20*np.log10(np.var(gamma_frames,axis=0)**2.1/ \
+                              (np.var(np.abs(gamma_frames),axis=0)+1e-5)))
             
-      def softmax(self, input):
-            output = np.exp(input)/np.sum(np.exp(input)+1e-3)
-            output = (output - np.min(output))/np.max(output)
-            return output
-
-      def gammatoneMaskEstimate(self, block, framelen, overlap):
-            subband_signals = np.vstack([lfilter(self.gFilters[:,k],1,block) for k in range(self.nFilterBanks)]).transpose()
-            frame_idx, numframes = self.get_frames(block, framelen, overlap)
-            Mask = np.zeros((self.nFilterBanks,numframes))
-            for i in range(self.nFilterBanks):
-                  Mask[i,:] = self.compute_feats(subband_signals[:,i], frame_idx)
-            Mask = np.flipud(Mask/repmat(np.max(Mask,axis=1)[:,np.newaxis],1,numframes))
-            enhanced = self.gammatone_synthesis(subband_signals, Mask, block, framelen, overlap, frame_idx, numframes)
-            enhanced = np.max(block)*enhanced/np.max(enhanced)
-            return enhanced, Mask
-      
-      def gammatone_synthesis(self, subband_signals, Mask, block, framelen, overlap, frame_idx, numframes):
-            coswin    = (1+np.cos(2*np.pi*np.array(range(framelen))/framelen- np.pi))/2
-            subband_signals = np.flipud(subband_signals)/self.midearcoeff
-            subband_signals = np.vstack([lfilter(self.gFilters[:,k],1,subband_signals[:,k]) for k in range(self.nFilterBanks)]).transpose()
-            subband_signals = np.flipud(subband_signals)/self.midearcoeff
-            weight = np.zeros((len(block), self.nFilterBanks))
+            # Entropy
+            Entropy = np.zeros(numFrames)
+            histBins = np.linspace(np.min(gamma_frames),np.max(gamma_frames), 30)
+            for j in range(numFrames):
+                  temp = np.histogram(np.abs(gamma_frames[:,j]),histBins)
+                  prob = temp[0]/np.sum(temp[0]+1e-5)
+                  Entropy[j] = 3.21 - np.sum((prob*np.log2(prob+1e-5))) 
+            Entropy = zmean(Entropy)
             
-            for m in range(numframes): 
-                  weight[frame_idx[:,m],:] = weight[frame_idx[:,m],:] + np.transpose(np.matmul(Mask[:,m][:,np.newaxis],coswin[np.newaxis,:]))
-            enhanced = np.mean(subband_signals*weight, axis=1)      
-            return enhanced
+            HigherOrderDiff = np.zeros(numFrames)
+            diffFrames = 4
+            for j in range(diffFrames):
+                  HigherOrderDiff = HigherOrderDiff+ np.sum(np.abs(np.diff(gamma_frames, j+1, axis=0)),axis=0)
+            HigherOrderDiff = zmean(HigherOrderDiff)
+          
+            Correlation = np.zeros(numFrames)
+            corrCoeff = np.corrcoef(gamma_frames.transpose())
+            corrFrames = 10
+            for j in range(corrFrames,numFrames):
+                  Correlation[j] = np.mean(corrCoeff[j,j-corrFrames:j])
+            Correlation = zmean(Correlation) 
+            
+            featureMatrix = np.array([Energy, HigherOrderDiff, Correlation, PeakValey, Entropy])
+            featureMatrix = sklearn_pca.fit_transform(featureMatrix.transpose()).flatten()
+            featureMatrix = softmax(1.0/(1.0+np.exp(-1*featureMatrix)))
+            
+            Mask.append(featureMatrix)
+            
+      Mask = medfilt2d(Mask,(odd(gamma_param['nFilterBanks']/16),3))
+      
+      # Mask -> Speech Activity Detection (SAD)
+      vad_temp = np.sum(Mask>0.3, axis=0)
+      vad_temp = medfilt(vad_temp/np.max(np.abs(vad_temp)),11);
+      vad_frames = vad_temp>0.8*np.mean(vad_temp)
+      vad_samples = resample(vad_frames, len(x)) > 0.5;   
+      
+      
+      # Reconstruction
+      increment = gamma_param['framelen']/gamma_param['overlap']
+      sigLength = len(x) #frameIdx[-1:,-1:][0][0]
+      y = np.zeros((sigLength,))
+      for k in range(gamma_param['nFilterBanks']):
+            gamma_mic[:,k] = np.flipud(gamma_mic[:,k])/gamma_param['midEarCoeff'][k]
+            temp = fftfilt_one(gamma_param['gFilters'][:,k],gamma_mic[:,k]);
+            gamma_mic[:,k] = np.flipud(temp)/gamma_param['midEarCoeff'][k]
+            
+            weight = np.zeros((sigLength,));
+            for m in range(numFrames-int(increment/2)+1):
+                  startpoint = m*gamma_param['overlap']
+                  if m <= int(increment/2):
+                        weight[:startpoint+int(gamma_param['framelen']/2)-1] += Mask[k,m]*(gamma_param['coswin'][int(gamma_param['framelen']/2)-startpoint+1:])           
+                  else:
+                        weight[startpoint-int(gamma_param['framelen']/2):startpoint+int(gamma_param['framelen']/2)] += Mask[k,m]*gamma_param['coswin'] 
+            
+            y += gamma_mic[:,k]*weight; 
+      y = np.max(np.abs(x))*y/np.max(np.abs(y))
 
-audio, samplerate = sf.read('../audiofiles/Reverb.wav')
-gt = Gammatone(samplerate, 256)
-framelen = int(20e-3*samplerate)
-overlap = int(10e-3*samplerate)
-output, Mask= gt.gammatoneMaskEstimate(audio,framelen, overlap)
-sf.write('../audiofiles/Enhanced.wav', output, samplerate)
-
-plt.figure(num=101)
-f, t, Sxx = spectrogram(audio, samplerate, window=np.hamming(framelen), noverlap=overlap, scaling='spectrum',mode='magnitude')
-plt.pcolormesh(t, f, 10*np.log10(Sxx))
-plt.ylabel('Frequency [Hz]')
-plt.xlabel('Time [sec]')
-plt.show()
+      return y, vad_samples
 
 
 
-plt.figure(num=102)
-f, t, Sxx = spectrogram(output, samplerate, window=np.hamming(framelen), noverlap=overlap, scaling='spectrum',mode='magnitude')
-plt.pcolormesh(t, f, 10*np.log10(Sxx))
-plt.ylabel('Frequency [Hz]')
-plt.xlabel('Time [sec]')
-plt.show()
 
-'''
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-plt.figure()
-ax = plt.gca()
-im = ax.imshow(Mask, cmap='bone')
-divider = make_axes_locatable(ax)
-cax = divider.append_axes("right", size="5%", pad=0.05)
-plt.colorbar(im, cax=cax)
-'''
 
 
 
